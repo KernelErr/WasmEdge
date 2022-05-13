@@ -4,6 +4,7 @@
 #pragma once
 
 #include "host/wasi/wasibase.h"
+#include "paddle/include/paddle_inference_api.h"
 #include <cstdint>
 
 namespace WasmEdge {
@@ -493,6 +494,19 @@ public:
                         uint32_t NodePtr, uint32_t NodeLen, uint32_t ServicePtr,
                         uint32_t ServiceLen, uint32_t HintsPtr, uint32_t ResPtr,
                         uint32_t MaxResLength, uint32_t ResLengthPtr);
+};
+
+class WasiPaddleYolov3 : public Wasi<WasiPaddleYolov3> {
+public:
+  WasiPaddleYolov3(WASI::Environ &HostEnv) : Wasi(HostEnv) {}
+
+  Expect<uint32_t> body(Runtime::Instance::MemoryInstance *MemInst,
+                        uint32_t ResPtr, uint32_t MaxResLength,
+                        uint32_t ResLengthPtr);
+  Expect<uint32_t>
+  run(paddle_infer::Predictor *predictor, const std::vector<float> &input,
+      const std::vector<int> &input_shape, const std::vector<float> &input_im,
+      const std::vector<int> &input_im_shape, std::vector<float> *out_data);
 };
 
 } // namespace Host

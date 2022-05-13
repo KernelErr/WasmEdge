@@ -6,6 +6,7 @@
 #include "common/log.h"
 #include "host/wasi/environ.h"
 #include "runtime/instance/memory.h"
+#include "paddle/include/paddle_inference_api.h"
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -2080,6 +2081,90 @@ WasiSockGetPeerAddr::body(Runtime::Instance::MemoryInstance *MemInst,
       unlikely(!Res)) {
     return Res.error();
   }
+  return __WASI_ERRNO_SUCCESS;
+}
+
+Expect<uint32_t>
+WasiPaddleYolov3::body(Runtime::Instance::MemoryInstance *MemInst,
+                       uint32_t ResPtr, uint32_t MaxResLength, uint32_t ResLengthPtr) {
+  using paddle_infer::Config;
+  using paddle_infer::CreatePredictor;
+  using paddle_infer::Predictor;
+
+  Config config;
+  config.SetModel("/path/to/model.pdmodel", "/path/to/model.pdiparams");
+  config.EnableMKLDNN();
+  auto predictor = CreatePredictor(config);
+
+  const int height = 608;
+  const int width = 608;
+  const int channels = 3;
+  std::vector<int> input_shape = {1, channels, height, width};
+  std::vector<float> input_data(1 * channels * height * width);
+  for (size_t i = 0; i < input_data.size(); ++i) {
+    input_data[i] = i % 255 * 0.13f;
+  }
+  std::vector<int> input_im_shape = {1, 2};
+  std::vector<float> input_im_data(1 * 2, 608);
+  std::vector<float> out_data;
+
+  if (auto Res = run(predictor.get(), input_data, input_shape, input_im_data,
+                     input_im_shape, &out_data);
+      unlikely(!Res)) {
+    return __WASI_ERRNO_CANCELED;
+  }
+
+  auto copyOutputData =
+      [&MemInst](uint8_t_ptr Base, uint32_t Length,
+                  const std::vector<float> &Data) {
+        for (uint32_t Item = 0; Item < Length && Item < Data.size(); Item++) {
+          auto *p = MemInst->getPointer<float *>(
+              Base + sizeof(float) * Item, sizeof(float));
+          *p = Data[Item];
+        }
+      };
+
+  auto *const ResLength = MemInst->getPointer<__wasi_size_t *>(
+      ResLengthPtr, sizeof(__wasi_size_t *));
+  copyOutputData(*(MemInst->getPointer<uint8_t_ptr *>(ResPtr, sizeof(uint8_t))),
+                  MaxResLength, out_data);
+  *ResLength = out_data.size();
+
+  return __WASI_ERRNO_SUCCESS;
+}
+
+Expect<uint32_t> WasiPaddleYolov3::run(paddle_infer::Predictor *predictor,
+                                       const std::vector<float> &input,
+                                       const std::vector<int> &input_shape,
+                                       const std::vector<float> &input_im,
+                                       const std::vector<int> &input_im_shape,
+                                       std::vector<float> *out_data) {
+  auto input_names = predictor->GetInputNames();
+  auto im_shape_handle = predictor->GetInputHandle(input_names[0]);
+  im_shape_handle->Reshape(input_im_shape);
+  im_shape_handle->CopyFromCpu(input_im.data());
+
+  auto image_handle = predictor->GetInputHandle(input_names[1]);
+  image_handle->Reshape(input_shape);
+  image_handle->CopyFromCpu(input_im.data());
+
+  auto scale_factor_handle = predictor->GetInputHandle(input_names[2]);
+  scale_factor_handle->Reshape(input_im_shape);
+  scale_factor_handle->CopyFromCpu(input_im.data());
+
+  if (auto Res = predictor->Run(); unlikely(!Res)) {
+    return __WASI_ERRNO_CANCELED;
+  }
+
+  auto output_names = predictor->GetOutputNames();
+  auto output_t = predictor->GetOutputHandle(output_names[0]);
+  std::vector<int> output_shape = output_t->shape();
+  int out_num = std::accumulate(output_shape.begin(), output_shape.end(), 1,
+                                std::multiplies<int>());
+
+  out_data->resize(out_num);
+  output_t->CopyToCpu(out_data->data());
+
   return __WASI_ERRNO_SUCCESS;
 }
 

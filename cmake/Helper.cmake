@@ -18,7 +18,6 @@ endif()
 
 list(APPEND WASMEDGE_CFLAGS
   -Wall
-  -Wextra
   -Werror
   -Wno-error=pedantic
 )
